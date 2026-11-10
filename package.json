@@ -1,0 +1,2 @@
+{ "name": "velorapanel", "private": true, "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18" }, "dependencies": { "firebase-admin": "^12.7.0" } }
