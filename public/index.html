@@ -23,21 +23,43 @@ input{flex:1;min-width:200px;padding:11px 12px;border-radius:6px;border:1px soli
 .on{color:var(--ok);border:1px solid var(--ok)}.off{color:var(--bad);border:1px solid var(--bad)}
 .msg{min-height:18px;color:var(--bad);font-size:13px;text-align:center}.empty{color:var(--mut);font-size:13px}
 #login{text-align:center;display:grid;gap:14px;justify-items:center;margin-top:12vh}
+.wrap.wide{max-width:900px}.tabs{display:flex;gap:8px}.tabs button.active{background:linear-gradient(#2a7fae,#1b5a82);color:#fff}
+textarea{width:100%;min-height:320px;padding:10px;border-radius:6px;border:1px solid var(--border);background:rgba(0,0,0,.4);color:var(--text);font:13px/1.4 monospace;resize:vertical}
+select{padding:11px;border-radius:6px;border:1px solid var(--border);background:rgba(0,0,0,.35);color:var(--text)}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.chip{font:12px Inter;letter-spacing:0;padding:7px 11px;word-break:break-all}
+button.dg{border-color:var(--bad);color:var(--bad)}.bar{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 </style></head><body>
-<div class="wrap">
+<div class="wrap wide">
   <h1>VELORAPANEL</h1>
-  <div id="login" class="card"><p class="empty">Admin access only.</p>
+  <div id="login" class="card" style="max-width:420px;margin:12vh auto 0;text-align:center"><p class="empty" style="margin-bottom:14px">Admin access only.</p>
     <button id="google" class="go">SIGN IN WITH GOOGLE</button></div>
 
-  <div id="panel" hidden class="wrap">
+  <div id="panel" hidden class="wrap wide">
     <div class="top"><span id="who"></span><button id="out">SIGN OUT</button></div>
-    <div class="card"><h2>FIND ACCOUNT</h2>
-      <form id="search"><input id="q" placeholder="Email or UID" autocomplete="off" required>
-        <button class="go">SEARCH</button></form>
-      <div id="result" style="margin-top:12px"></div></div>
-    <div class="card"><h2>BANNED ACCOUNTS</h2>
-      <div style="margin-bottom:8px"><button id="refresh">REFRESH</button></div>
-      <div id="banned" class="empty">Loading…</div></div>
+    <div class="tabs"><button data-tab="acc" class="active">ACCOUNTS</button><button data-tab="db">DATABASE</button></div>
+
+    <div id="tab-acc" class="wrap wide">
+      <div class="card"><h2>FIND ACCOUNT</h2>
+        <form id="search"><input id="q" placeholder="Email or UID" autocomplete="off" required><button class="go">SEARCH</button></form>
+        <div id="result" style="margin-top:12px"></div></div>
+      <div class="card"><h2>ALL ACCOUNTS</h2>
+        <div class="bar" style="margin:0 0 8px"><select id="filter"><option value="banned">Banned only</option><option value="all">Everyone</option></select>
+          <button id="refresh">REFRESH</button></div>
+        <div id="users" class="empty">Loading…</div>
+        <div class="bar"><button id="more" hidden>LOAD MORE</button></div></div>
+    </div>
+
+    <div id="tab-db" hidden class="wrap wide">
+      <div class="card"><h2>FIRESTORE</h2>
+        <form id="open"><input id="path" placeholder="Path, e.g. users  or  users/abc123" autocomplete="off"><button class="go">OPEN</button></form>
+        <div id="crumb" class="empty" style="margin-top:10px"></div>
+        <div id="chips" class="chips"></div>
+        <div class="bar"><button id="more2" hidden>LOAD MORE</button><button id="newdoc" hidden>+ NEW DOCUMENT</button></div></div>
+      <div id="editor" class="card" hidden><h2 id="etitle"></h2>
+        <textarea id="json" spellcheck="false"></textarea>
+        <div class="empty" style="margin-top:6px">Timestamps look like {"__type":"timestamp","value":"2026-01-01T00:00:00Z"}. Keep that shape when editing.</div>
+        <div class="bar"><button id="save" class="go">SAVE</button><button id="del" class="dg">DELETE DOCUMENT</button><button id="back">BACK</button></div></div>
+    </div>
   </div>
   <div id="msg" class="msg"></div>
 </div>
@@ -60,39 +82,103 @@ const call = async (d) => { say(); try {
   const j = await r.json(); if (!r.ok) throw new Error(j.error || "Request failed"); return j;
 } catch (e) { say(e.message); throw e; } };
 
+// tabs
+document.querySelectorAll("[data-tab]").forEach((b) => b.onclick = () => {
+  document.querySelectorAll("[data-tab]").forEach((x) => { x.classList.toggle("active", x === b); $("tab-" + x.dataset.tab).hidden = x !== b; });
+  if (b.dataset.tab === "db" && !$("chips").children.length) openPath("");
+});
+
+// ---------- accounts ----------
 function userRow(u) {
-  const row = el("div", "row"), info = el("div");
+  const row = el("div", "row"), info = el("div"), btns = el("div", "bar");
+  btns.style.margin = 0;
   const t = el("div", null, (u.email || u.uid) + (u.name ? " · " + u.name : ""));
   t.append(" ", el("span", "tag " + (u.disabled ? "off" : "on"), u.disabled ? "BANNED" : "ACTIVE"));
   info.append(t, el("small", null, "UID " + u.uid + " · last sign-in " + (u.lastSignIn || "never")));
-  row.append(info);
-  if (u.disabled) {
-    const b = el("button", "go", "ENABLE");
-    b.onclick = async () => { b.disabled = true;
-      try { await call({ action: "enable", uid: u.uid }); say("Enabled " + (u.email || u.uid)); await loadBanned(); $("result").replaceChildren(); }
-      catch { b.disabled = false; } };
-    row.append(b);
-  }
-  return row;
+  const toggle = el("button", u.disabled ? "go" : "dg", u.disabled ? "ENABLE" : "BAN");
+  toggle.onclick = async () => {
+    if (!u.disabled && !confirm("Ban " + (u.email || u.uid) + "?")) return;
+    toggle.disabled = true;
+    try { const n = await call({ action: "setDisabled", uid: u.uid, disabled: !u.disabled }); row.replaceWith(userRow(n)); }
+    catch { toggle.disabled = false; }
+  };
+  const del = el("button", "dg", "DELETE");
+  del.onclick = async () => {
+    if (!confirm("PERMANENTLY delete account " + (u.email || u.uid) + "? This cannot be undone.")) return;
+    try { await call({ action: "deleteUser", uid: u.uid }); row.remove(); } catch {}
+  };
+  btns.append(toggle, del); row.append(info, btns); return row;
 }
-
-async function loadBanned() {
-  const box = $("banned"); box.className = "empty"; box.textContent = "Loading… (the server may take ~1 min to wake up)";
-  try { const list = await call({ action: "list" });
-    box.replaceChildren(); if (!list.length) { box.textContent = "No banned accounts 🎉"; return; }
-    box.className = ""; list.forEach((u) => box.append(userRow(u)));
-  } catch { box.textContent = "Could not load."; }
+let nextToken = null;
+async function loadUsers(more) {
+  const box = $("users"); if (!more) { box.className = "empty"; box.textContent = "Loading… (the server may take ~1 min to wake up)"; }
+  try {
+    const r = await call({ action: "list", onlyBanned: $("filter").value === "banned", pageToken: more ? nextToken : null });
+    if (!more) box.replaceChildren(); nextToken = r.next; $("more").hidden = !r.next;
+    if (!more && !r.users.length) { box.className = "empty"; box.textContent = "No accounts here 🎉"; return; }
+    box.className = ""; r.users.forEach((u) => box.append(userRow(u)));
+  } catch { if (!more) { box.className = "empty"; box.textContent = "Could not load."; } }
 }
-
 $("search").onsubmit = async (e) => { e.preventDefault(); const r = $("result"); r.replaceChildren();
   try { r.append(userRow(await call({ action: "lookup", query: $("q").value }))); } catch {} };
-$("refresh").onclick = loadBanned;
+$("refresh").onclick = () => loadUsers(false); $("filter").onchange = () => loadUsers(false); $("more").onclick = () => loadUsers(true);
+
+// ---------- firestore ----------
+let cur = "", lastId = null;
+const clean = (p) => p.trim().replace(/^\/+|\/+$/g, "");
+const chip = (label, fn) => { const b = el("button", "chip", label); b.onclick = fn; return b; };
+async function openPath(p, more) {
+  p = clean(p); cur = p; $("path").value = p; $("editor").hidden = true;
+  const chips = $("chips"); if (!more) chips.replaceChildren();
+  $("more2").hidden = true; $("newdoc").hidden = true;
+  try {
+    if (!p) { $("crumb").textContent = "Root collections"; (await call({ action: "fsRoot" })).forEach((c) => chips.append(chip(c, () => openPath(c)))); return; }
+    if (p.split("/").length % 2) {
+      $("crumb").textContent = "Collection: " + p;
+      const ids = await call({ action: "fsList", path: p, after: more ? lastId : null });
+      ids.forEach((id) => chips.append(chip(id, () => openPath(p + "/" + id))));
+      if (!ids.length && !more) chips.append(el("span", "empty", "Empty collection."));
+      lastId = ids[ids.length - 1]; $("more2").hidden = ids.length < 50; $("newdoc").hidden = false;
+    } else {
+      $("crumb").textContent = "Document: " + p;
+      const r = await call({ action: "fsGet", path: p });
+      r.subs.forEach((c) => chips.append(chip(c + " ▸", () => openPath(p + "/" + c))));
+      showEditor(p, r.data, r.exists);
+    }
+  } catch {}
+}
+function showEditor(p, data, exists) {
+  $("editor").hidden = false; $("etitle").textContent = (exists ? "EDIT " : "NEW ") + p;
+  $("json").value = JSON.stringify(data, null, 2); $("del").hidden = !exists;
+}
+const parentOf = (p) => p.split("/").slice(0, -1).join("/");
+$("open").onsubmit = (e) => { e.preventDefault(); openPath($("path").value); };
+$("more2").onclick = () => openPath(cur, true);
+$("back").onclick = () => openPath(parentOf(cur));
+$("newdoc").onclick = () => {
+  const id = prompt("New document ID (leave empty for a random one):");
+  if (id === null) return;
+  const docId = clean(id).replace(/\//g, "") || Math.random().toString(36).slice(2, 12) + Math.random().toString(36).slice(2, 12);
+  $("crumb").textContent = "Document: " + cur + "/" + docId; cur = cur + "/" + docId; $("path").value = cur;
+  showEditor(cur, {}, false);
+};
+$("save").onclick = async () => {
+  let data; try { data = JSON.parse($("json").value); } catch (e) { say("Invalid JSON: " + e.message); return; }
+  if (!confirm("Save changes to " + cur + "? This overwrites the whole document.")) return;
+  try { await call({ action: "fsSet", path: cur, data }); say("Saved ✓"); } catch {}
+};
+$("del").onclick = async () => {
+  if (!confirm("PERMANENTLY delete document " + cur + "?")) return;
+  try { await call({ action: "fsDelete", path: cur }); say("Deleted ✓"); openPath(parentOf(cur)); } catch {}
+};
+
+// ---------- login ----------
 $("google").onclick = () => signInWithPopup(auth, new GoogleAuthProvider()).catch((e) => say(e.message));
 $("out").onclick = () => signOut(auth);
 onAuthStateChanged(auth, (user) => {
   const ok = !!user && user.emailVerified && ADMINS.includes((user.email || "").toLowerCase());
   if (user && !ok) { say("Access denied for " + user.email); signOut(auth); return; }
   $("login").hidden = ok; $("panel").hidden = !ok; if (!ok) return;
-  say(); $("who").textContent = "Signed in as " + user.email; loadBanned();
+  say(); $("who").textContent = "Signed in as " + user.email; loadUsers(false);
 });
 </script></body></html>
